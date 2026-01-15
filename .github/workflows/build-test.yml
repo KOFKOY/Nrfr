@@ -1,10 +1,10 @@
-name: Build Release
+name: Build Android APK Release
 
 on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "发布版本号（例如：v1.2.3）"
+        description: "v1.0"
         required: true
         type: string
 
@@ -12,8 +12,9 @@ permissions:
   contents: write
 
 jobs:
-  build:
-    runs-on: windows-latest
+  build-android:
+    runs-on: ubuntu-latest   # 不再依赖 Windows，改用更轻量的 Linux
+
     steps:
       - uses: actions/checkout@v4
         with:
@@ -64,7 +65,7 @@ jobs:
           echo -e "$CHANGELOG" > CHANGELOG.md
         shell: bash
 
-      # 设置 Java 环境
+      # 设置 JDK
       - name: Set up JDK
         uses: actions/setup-java@v4
         with:
@@ -75,7 +76,7 @@ jobs:
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
 
-      # 下载替换 android.jar
+      # 下载替换 android.jar（如果你不需要自定义 android.jar，可以删掉这个步骤）
       - name: Download android.jar
         run: |
           mkdir -p $ANDROID_HOME/platforms/android-34
@@ -90,76 +91,20 @@ jobs:
           ./gradlew assembleDebug
         shell: bash
 
-      # 设置 Go 环境
-      - name: Set up Go
-        uses: actions/setup-go@v5
-        with:
-          go-version: "1.23"
-
-      # 设置 Node.js 环境
-      - name: Set up Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: "21"
-
-      # 安装 Wails
-      - name: Install Wails
-        run: go install github.com/wailsapp/wails/v2/cmd/wails@latest
-
-      # 构建 Wails 应用
-      - name: Build Wails App
+      # 重命名/复制 APK，带上版本号
+      - name: Prepare APK Artifact
         run: |
-          cd nrfr-client/frontend
-          npm install
-          cd ..
-          wails build
-        shell: bash
-
-      # 下载最新的 Shizuku APK
-      - name: Download Shizuku APK
-        run: |
-          mkdir -p nrfr-client/build/bin/resources
-          curl -L $(curl -s https://api.github.com/repos/RikkaApps/Shizuku/releases/latest | grep "browser_download_url.*apk" | cut -d '"' -f 4) -o nrfr-client/build/bin/resources/shizuku.apk
-        shell: bash
-
-      # 复制 Android APK
-      - name: Copy Android APK
-        run: |
-          cp app/build/outputs/apk/debug/app-debug.apk nrfr-client/build/bin/resources/nrfr.apk
+          ls app/build/outputs/apk -R
           cp app/build/outputs/apk/debug/app-debug.apk nrfr-${{ steps.version.outputs.version }}.apk
         shell: bash
 
-      # 下载 platform-tools
-      - name: Download platform-tools
-        run: |
-          mkdir -p nrfr-client/build/bin/platform-tools
-          if [ "$RUNNER_OS" == "Windows" ]; then
-            curl -L https://dl.google.com/android/repository/platform-tools-latest-windows.zip -o platform-tools.zip
-          elif [ "$RUNNER_OS" == "Linux" ]; then
-            curl -L https://dl.google.com/android/repository/platform-tools-latest-linux.zip -o platform-tools.zip
-          else
-            curl -L https://dl.google.com/android/repository/platform-tools-latest-darwin.zip -o platform-tools.zip
-          fi
-          unzip platform-tools.zip
-          cp -r platform-tools/* nrfr-client/build/bin/platform-tools/
-          rm -rf platform-tools platform-tools.zip
-        shell: bash
-
-      # 打包发布文件
-      - name: Create Release Archive
-        run: |
-          cd nrfr-client/build/bin
-          7z a "../../nrfr-${{ steps.version.outputs.version }}-release.zip" ./*
-        shell: bash
-
-      # 创建 Release（使用手动输入的 tag）
+      # 创建 GitHub Release，只上传 APK
       - name: Create Release
         uses: softprops/action-gh-release@v1
         with:
           tag_name: ${{ steps.version.outputs.version }}
           name: ${{ steps.version.outputs.version }}
           files: |
-            nrfr-client/nrfr-${{ steps.version.outputs.version }}-release.zip
             nrfr-${{ steps.version.outputs.version }}.apk
           body_path: CHANGELOG.md
         env:
