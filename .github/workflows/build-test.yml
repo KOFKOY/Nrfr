@@ -1,0 +1,111 @@
+name: Build Android APK Release
+
+on:
+  workflow_dispatch:  # 手动触发，不需要输入参数
+
+permissions:
+  contents: write
+
+jobs:
+  build-android:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # 获取版本号和提交信息
+      - name: Get Version Info
+        id: version
+        run: |
+          # 1. 获取版本号：优先使用当前 commit 的 tag，否则回退到 v1.0
+          VERSION=$(git describe --tags --exact-match 2>/dev/null || echo "v1.0")
+          echo "version=${VERSION}" >> $GITHUB_OUTPUT
+
+          echo "Using version: ${VERSION}"
+
+          # 2. 生成 CHANGELOG
+          if git rev-list --tags --max-count=1 > /dev/null 2>&1; then
+              # 找到上一个 tag（如果没有就用第一个 commit）
+              LAST_TAG=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || git rev-list --max-parents=0 HEAD)
+
+              # 获取所有提交并过滤掉CI相关提交和文档提交
+              ALL_COMMITS=$(git log --pretty=format:"%h %s (%an)" $LAST_TAG..HEAD | grep -v -E "ci:|docs:" || true)
+
+              # 分别获取不同类型的提交
+              FEAT_COMMITS=$(echo "$ALL_COMMITS" | grep "^[a-f0-9]\+ feat:" || true)
+              FIX_COMMITS=$(echo "$ALL_COMMITS" | grep "^[a-f0-9]\+ fix:" || true)
+              OTHER_COMMITS=$(echo "$ALL_COMMITS" | grep -v "^[a-f0-9]\+ \(feat:\|fix:\)" || true)
+
+              # 组装changelog
+              CHANGELOG=""
+              if [ ! -z "$FEAT_COMMITS" ]; then
+                  CHANGELOG+="### 功能改进\n$FEAT_COMMITS\n"
+              fi
+              if [ ! -z "$FIX_COMMITS" ]; then
+                  CHANGELOG+="### 问题修复\n$FIX_COMMITS\n"
+              fi
+              if [ ! -z "$OTHER_COMMITS" ]; then
+                  CHANGELOG+="### 其他更新\n$OTHER_COMMITS"
+              fi
+          else
+              CHANGELOG="### 首次发布\n$(git log --pretty=format:"- %h %s (%an)" | grep -v "ci:" || true)"
+          fi
+
+          # 如果changelog为空，添加默认信息
+          if [ -z "$CHANGELOG" ]; then
+              CHANGELOG="### 无更新内容"
+          fi
+
+          # 输出
+          echo -e "$CHANGELOG"
+
+          # 将 changelog 写入文件
+          echo -e "$CHANGELOG" > CHANGELOG.md
+        shell: bash
+
+      # 设置 JDK
+      - name: Set up JDK
+        uses: actions/setup-java@v4
+        with:
+          distribution: "temurin"
+          java-version: "21"
+
+      # 设置 Android SDK
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      # 下载替换 android.jar（如果你不需要自定义 android.jar，可以删掉这个步骤）
+      - name: Download android.jar
+        run: |
+          mkdir -p $ANDROID_HOME/platforms/android-34
+          curl -L https://raw.githubusercontent.com/Reginer/aosp-android-jar/refs/heads/main/android-34/android.jar -o $ANDROID_HOME/platforms/android-34/android.jar
+        shell: bash
+
+      # 构建 Android APK
+      - name: Build Android APK
+        run: |
+          gradle wrapper
+          chmod +x ./gradlew
+          ./gradlew assembleDebug
+        shell: bash
+
+      # 重命名/复制 APK，带上版本号
+      - name: Prepare APK Artifact
+        run: |
+          ls app/build/outputs/apk -R
+          cp app/build/outputs/apk/debug/app-debug.apk nrfr-${{ steps.version.outputs.version }}.apk
+        shell: bash
+
+      # 创建 GitHub Release，只上传 APK
+      - name: Create Release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: ${{ steps.version.outputs.version }}
+          name: ${{ steps.version.outputs.version }}
+          files: |
+            nrfr-${{ steps.version.outputs.version }}.apk
+          body_path: CHANGELOG.md
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
