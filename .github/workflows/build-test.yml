@@ -1,19 +1,14 @@
 name: Build Android APK Release
 
 on:
-  workflow_dispatch:
-    inputs:
-      tag:
-        description: "v1.0"
-        required: true
-        type: string
+  workflow_dispatch:  # 手动触发，不需要输入参数
 
 permissions:
   contents: write
 
 jobs:
   build-android:
-    runs-on: ubuntu-latest   # 不再依赖 Windows，改用更轻量的 Linux
+    runs-on: ubuntu-latest
 
     steps:
       - uses: actions/checkout@v4
@@ -24,10 +19,15 @@ jobs:
       - name: Get Version Info
         id: version
         run: |
-          VERSION="${{ github.event.inputs.tag }}"
+          # 1. 获取版本号：优先使用当前 commit 的 tag，否则回退到 v1.0
+          VERSION=$(git describe --tags --exact-match 2>/dev/null || echo "v1.0")
           echo "version=${VERSION}" >> $GITHUB_OUTPUT
 
+          echo "Using version: ${VERSION}"
+
+          # 2. 生成 CHANGELOG
           if git rev-list --tags --max-count=1 > /dev/null 2>&1; then
+              # 找到上一个 tag（如果没有就用第一个 commit）
               LAST_TAG=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || git rev-list --max-parents=0 HEAD)
 
               # 获取所有提交并过滤掉CI相关提交和文档提交
